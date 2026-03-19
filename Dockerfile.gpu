@@ -1,0 +1,81 @@
+# Docker for TensorFlow - GPU Optimized
+# Production-ready template for TensorFlow GPU deployments
+# Requires NVIDIA Docker runtime
+
+# Base image with CUDA support
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04 AS builder
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    python3-venv \
+    curl \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -u 1000 -s /bin/bash appuser
+USER appuser
+WORKDIR /home/appuser
+
+# Create virtual environment
+RUN python3 -m venv /home/appuser/venv
+ENV PATH="/home/appuser/venv/bin:$PATH"
+
+# Copy requirements first for better caching
+COPY --chown=appuser:appuser requirements.txt .
+
+# Install TensorFlow with GPU support
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir tensorflow[and-cuda]==2.15.0 && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Verify CUDA availability
+RUN python3 -c "import tensorflow as tf; print('GPU Available:', tf.config.list_physical_devices('GPU'))"
+
+# Final stage - minimal image
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash appuser
+USER appuser
+WORKDIR /home/appuser
+
+# Copy virtual environment from builder
+COPY --from=builder --chown=appuser:appuser /home/appuser/venv /home/appuser/venv
+ENV PATH="/home/appuser/venv/bin:$PATH"
+
+# Copy application code
+COPY --chown=appuser:appuser src/ /home/appuser/src/
+COPY --chown=appuser:appuser config/ /home/appuser/config/
+COPY --chown=appuser:appuser scripts/ /home/appuser/scripts/
+
+# Set environment variables for GPU
+ENV PYTHONPATH=/home/appuser/src
+ENV PYTHONUNBUFFERED=1
+ENV TF_CPP_MIN_LOG_LEVEL=3
+ENV TF_FORCE_GPU_ALLOW_GROWTH=true
+ENV TF_GPU_ALLOCATOR=cuda_malloc_async
+
+# NVIDIA specific environment variables
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# Health check with GPU verification
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python3 -c "import tensorflow as tf; gpus = tf.config.list_physical_devices('GPU'); print(f'GPUs Available: {len(gpus)}'); assert len(gpus) > 0, 'No GPU detected'" || exit 1
+
+# Expose ports
+EXPOSE 8501  # REST API
+EXPOSE 8500  # gRPC
+
+# Default command - can be overridden
+CMD ["python3", "/home/appuser/src/serve.py"]

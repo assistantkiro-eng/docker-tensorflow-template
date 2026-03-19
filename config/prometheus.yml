@@ -1,0 +1,60 @@
+# Prometheus Configuration
+# For monitoring TensorFlow serving
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'tensorflow-serving'
+
+# Rule files
+rule_files:
+  - "rules.yml"
+
+# Alerting
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # TensorFlow Serving
+  - job_name: 'tensorflow-serving'
+    static_configs:
+      - targets: ['tensorflow-serving-cpu:8501', 'tensorflow-serving-gpu:8501']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        regex: '([^:]+)(?::\d+)?'
+        replacement: '${1}'
+
+  # Node exporter
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # cAdvisor
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # Docker
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['docker-exporter:9323']
+
+# Storage
+remote_write:
+  - url: http://thanos-receive:10908/api/v1/receive
+
+remote_read:
+  - url: http://thanos-query:10912/api/v1/read
